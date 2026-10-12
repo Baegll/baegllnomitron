@@ -88,6 +88,8 @@ async def data(bot, interaction: discord.Integration, player = None):
     pid = int(pid)
     text  = f"Player : {bot.get('Players',pid, 'Name')}\n"
     text += f"Roles : {', '.join(bot.get('Players',pid, 'Roles'))}\n"
+    text += f"Intrinsic : {', '.join(f'{k}: {v}' for k, v in bot.get('Players',pid).get('Intrinsic', {}).items())}\n"
+    text += f"Pockets : {', '.join(f'{k}: {v}' for k, v in bot.get('Players',pid).get('Pockets', {}).items())}\n"
     await bot.Modules['Discord_Module'].return_resp(bot, interaction, text, ephemeral=True)
 
 async def roll(bot, interaction: discord.Interaction, dice :str):
