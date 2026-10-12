@@ -1,4 +1,4 @@
-import time, traceback, re, yaml, socket, pytz, inspect, discord, string, logging, hashlib
+import time, traceback, re, yaml, socket, pytz, inspect, discord, string, logging, hashlib # pyright: ignore[reportMissingImports, reportMissingModuleSource]
 import asyncio, os, importlib, glob, random, sys, datetime, shutil, signal
 from os.path import exists, join, basename
 from copy import deepcopy
@@ -13,14 +13,14 @@ os.chdir(path)
 savepath        = join(path, 'Save-State')
 history_folder  = join(savepath, 'History')
 backup_folder   = join(path, 'Backups')
-# shutil.rmtree(savepath, ignore_errors=True)
 if not exists(savepath): os.mkdir(savepath)
 if not exists(backup_folder): os.mkdir(backup_folder)
 print(savepath, path)
 
-serverName      = "Nomic VIII PTR"
+serverTest      = "Nomic VIII PTR"
+serverName      = "Nomic IX"
 speed_mult      = 1
-startDate       = datetime.datetime( year =2026, month = 9, day = 28-7, hour = 2, minute=0, tzinfo=timezone)
+startDate       = datetime.datetime( year =2026, month = 9, day = 28, hour = 0, minute=0, tzinfo=timezone)
 logFile         = 'Nomitorn_Log.txt' 
 
 SAVE_TO_FOLDER  = '_SAVE TO FOLDER SAVE FLAG'
@@ -66,7 +66,6 @@ class DiscordNomicBot():
         self.last_save_time   = self.now()
         self.last_backup_time = self.now()
 
-        self.ServerName = serverName
         self.stage_source = "Unknown"
 
         self.lock = False
@@ -92,6 +91,12 @@ class DiscordNomicBot():
         try:
             loop       = asyncio.new_event_loop()
             token      = open(join(path, 'Core', 'token.secret'),'r').readlines()[0].strip()
+            if token[-4:] != '00Bg': 
+                self.log('   On Main Server')
+                self.ServerName = serverName
+            else:                        
+                self.log('   On Test Server')
+                self.ServerName = serverTest
             self.discord    = discord
             self.client     = self.discord.Client(loop = loop, heartbeat_timeout=60*10, intents=self.discord.Intents.all())
             self.commandTree = self.discord.app_commands.CommandTree(self.client )                                                                

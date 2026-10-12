@@ -17,8 +17,8 @@ async def setup(bot):
         checks = ['isMod'])
 
     bot.Modules['Commands'].add_command(bot,
-        name= 'exit',
-        description= 'mod only -  save and exit; the container restarts the bot',
+        name= 'restart',
+        description= 'mod only -  save and exit and restart',
         callback = exitBot,
         checks = ['isMod'])
 

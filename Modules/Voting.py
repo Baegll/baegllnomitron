@@ -1,7 +1,7 @@
 #
 # Voting System Module For Discord Bot
 ################################
-import pickle, sys, time, io, discord, datetime, urllib, re, random
+import pickle, sys, time, io, discord, datetime, urllib, re, random # pyright: ignore[reportMissingImports]
 from copy import *
 defaultProposalData = {
     'Votees': [],
@@ -209,7 +209,8 @@ async def popProposalMain(bot):
         bot.set(('Queue-Proposals', propIDs[0], 'Proposal#'), init_proposal_val)
         init_proposal_val += 1
 
-    bot.set(('Vars', 'Next Proposal Number'), init_proposal_val)
+    if init_proposal_val != bot.get('Vars', 'Next Proposal Number'):
+        bot.set(('Vars', 'Next Proposal Number'), init_proposal_val)
 
 async def popProposalJudge(bot):
     bot.log('Pop Proposal Judge')

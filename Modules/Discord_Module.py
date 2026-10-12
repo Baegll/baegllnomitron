@@ -514,16 +514,16 @@ async def on_raw_typing(bot: Bot, payload: discord.RawTypingEvent) -> None: # No
     if not isPlayer(bot, payload.user_id): return  
 
     event = await typingDict(bot, payload) 
-    bot.schedule( 
-        method_name = 'passToModule',
-        module_name = 'Nomitron',
-        kwargs={'function_name':'on_typing', 'kwargs':{'event': event}},
-        Key=['Vars', 'Time'],
-        Mode='>',
-        Trigger_Value=bot.now()-bot.sec, 
-        name = f"Typing Event {bot.now()} {payload.user_id}", 
-        sequential_only=True,
-    )
+    # bot.schedule( 
+    #     method_name = 'passToModule',
+    #     module_name = 'Nomitron',
+    #     kwargs={'function_name':'on_typing', 'kwargs':{'event': event}},
+    #     Key=['Vars', 'Time'],
+    #     Mode='>',
+    #     Trigger_Value=bot.now()-bot.sec, 
+    #     name = f"Typing Event {bot.now()} {payload.user_id}", 
+    #     sequential_only=True,
+    # )
 
 async def on_guild_channel_mkrm(bot: Bot, channel: discord.abc.GuildChannel, mode: str) -> None:
     if bot.get('Servers',bot.ServerName,'SID') != channel.guild_id: return

@@ -15,13 +15,6 @@ async def setup(bot):
             module_name = 'Schedules',
             Key = ('Vars','Time'), Mode='>=', Trigger_Value= bot.Modules['Nomitron'].startDate, sequential_only=False
         )
-    if 'End Of Turn' not in bot.keys('Schedules'): 
-        bot.schedule(
-            name = 'End Of Turn',
-            method_name = 'onTurnEnd',
-            module_name = 'Schedules',
-            Key = ('Vars','Time'), Mode='>=', Trigger_Value= bot.Modules['Nomitron'].startDate, sequential_only=False
-        )
     if 'End Of Week' not in bot.keys('Schedules'): 
         bot.schedule(
             name = 'End Of Week',
@@ -63,7 +56,7 @@ async def onDayEnd(bot):
     
     day = bot.get('Vars', 'Day') + 1
     isEndOfTurn = ((day-1)*bot.day + bot.Modules['Nomitron'].startDate).weekday() in [0,3,5]
-    bot.set(('Vars', 'Day'), day )
+    bot.stage(('Vars', 'Day'), 'increment', 1)
     bot.set(('Vars', 'Weekday'), ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][((day-1)*bot.day + bot.Modules['Nomitron'].startDate).weekday()])
     bot.schedule(
         name = 'End Of Day',
@@ -81,7 +74,7 @@ async def onDayEnd(bot):
 
 async def onTurnEnd(bot):
     bot.log(f"End Of Turn {bot.get('Vars', 'Turn')}")
-    bot.set(('Vars', 'Turn'), bot.get('Vars', 'Turn') + 1)
+    bot.stage(('Vars', 'Turn'), 'increment', 1)
    
     # =============================================
     # Perform On Day End Functions Here============
@@ -93,7 +86,7 @@ async def onTurnEnd(bot):
 async def onWeekEnd(bot):
     bot.log(f"End Of Week {bot.get('Vars', 'Week')}")
     week = bot.get('Vars', 'Week') + 1
-    bot.set(('Vars', 'Week'), week )
+    bot.stage(('Vars', 'Week'), 'increment', 1)
     weekstart = bot.Modules['Nomitron'].startDate - bot.Modules['Nomitron'].startDate.weekday() * bot.day
     
     bot.schedule(
