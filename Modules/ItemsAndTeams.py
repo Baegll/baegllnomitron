@@ -109,7 +109,7 @@ async def setup(bot):
 
     add_command(bot,
         name= 'pocket',
-        description= "take from your team's bags or cups: !pocket <amount> <item>",
+        description= "take an item from your team's bags: !pocket <amount> <item>",
         callback = pocket,
         checks = ['isPlayer', 'isActions'])
 
@@ -383,7 +383,7 @@ async def teamData(bot, payload, *args):
 async def setAmount(bot, payload, *args):
     args = payload['Content'].split(' ')[1:]
     resources = bot.get('Resources')
-    holdable = resources['Items'] + resources['Fluids']
+    holdable = resources['Items'] + resources['Fluids'] # union of team and player holdability
     target, amount, name = splitAmount(bot, args)
     if target is None:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, "Use !set-amount <@player or team> <amount> <resource>. The resource must be listed under Intrinsic, Items, Fluids or Sauces.")
@@ -400,6 +400,8 @@ async def setAmount(bot, payload, *args):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is intrinsic, and teams don't hold intrinsic resources.")
     if name not in holdable:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} isn't listed under Intrinsic, Items or Fluids.")
+    if table == 'Players' and name not in resources['Items'] and amount != 0:     # 0 still clears one held from before
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is a fluid, and pockets only hold items. Fluids go in a team's cups.")
     if amount < 0 or (name in resources['Items'] and type(amount) is not int):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, "The amount can't be less than 0, and must be a whole number for an item.")
     path = ('Players', key, 'Pockets') if table == 'Players' else ('Teams', key, 'Bags' if name in resources['Items'] else 'Cups')
@@ -428,6 +430,8 @@ async def give(bot, payload, *args):
     who = bot.get('Players', key, 'Name') if table == 'Players' else key
     if table == 'Players' and not bot.Modules['Discord_Module'].isPlayer(bot, key):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} is not a player.")
+    if table == 'Players' and name not in resources['Items']:
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"Pockets only hold items, so {name} can only be given to a team.")
     if table == 'Players' and amount > pocketRoom(bot, key):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} doesn't have room in their pockets.")
     path = ('Players', key, 'Pockets') if table == 'Players' else ('Teams', key, 'Bags' if name in resources['Items'] else 'Cups')
@@ -448,13 +452,15 @@ async def pocket(bot, payload, *args):
     team = teamOf(bot, pid)
     if amount is None:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, "Use !pocket <amount> <item>.")
-    if name not in resources['Items'] + resources['Fluids']:
-        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} isn't an item or a fluid. !resources lists them.")
+    if name in resources['Fluids'] and name not in resources['Items']:
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is a fluid, and pockets only hold items. It stays in your team's cups.")
+    if name not in resources['Items']:
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} isn't an item. !resources lists them.")
     if team is None:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, "You aren't on a team.")
-    if amount <= 0 or (name in resources['Items'] and type(amount) is not int):
-        return await bot.Modules['Discord_Module'].return_resp(bot, payload, "The amount must be more than 0, and a whole number for an item.")
-    path = ('Teams', team, 'Bags' if name in resources['Items'] else 'Cups')
+    if amount <= 0 or type(amount) is not int:
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, "The amount must be a whole number more than 0.")
+    path = ('Teams', team, 'Bags')
     stock = bot.get(*path, name) if bot.has(*path, name) else 0
     if stock < amount:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{team} only has {stock} {name} in its {path[-1].lower()}.")
