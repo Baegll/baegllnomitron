@@ -116,6 +116,7 @@ async def onDayStart(bot):
     )
     # =============================================
     # Perform On Day Start Functions Here==========
+    await bot.wrap( bot.Modules['ActivityDays'].onDayStart, {'bot':bot} )
 
 
     # =============================================

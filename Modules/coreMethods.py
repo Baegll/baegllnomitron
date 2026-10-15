@@ -48,7 +48,7 @@ async def update_display(bot):
     
     displayMsgs = [ ]
     displayMsgs.append({
-            'Content': f"Nomic Time: Week {bot.get('Vars', 'Week')} - Day {bot.get('Vars', 'Day')} ({bot.get('Vars', 'Weekday')})- Turn {bot.get('Vars', 'Turn')} \n at {bot.get('Vars', 'Time').strftime('%Y-%m-%d %H:%M:%S')}",
+            'Content': f"Nomic Time: Week {bot.get('Vars', 'Week')} - Day {bot.get('Vars', 'Day')} ({bot.get('Vars', 'Weekday')})- Turn {bot.get('Vars', 'Turn')} \n at {bot.get('Vars', 'Time').strftime('%Y-%m-%d %H:%M:%S')} \n Activity Day: {bot.get('Vars').get('Activity Day') or 'None'}",
     })
     displayMsgs.append({
             'Content': f"Next Proposal Number {bot.get('Vars', 'Next Proposal Number')} ",
