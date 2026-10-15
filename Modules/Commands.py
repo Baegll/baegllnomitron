@@ -87,7 +87,7 @@ async def data(bot, interaction: discord.Integration, player = None):
     if pid == '' or not bot.has('Players', int(pid)): return await bot.Modules['Discord_Module'].return_resp(bot, interaction, "I couldn't find that player.", ephemeral=True)
     pid = int(pid)
     text  = f"Player : {bot.get('Players',pid, 'Name')}\n"
-    text += f"Roles : {', '.join(bot.get('Players',pid, 'Roles'))}\n"
+    text += f"Roles : {', '.join(r for r in bot.get('Players',pid, 'Roles') if r != '@everyone')}\n"
     text += f"Intrinsic : {', '.join(f'{k}: {v}' for k, v in bot.get('Players',pid).get('Intrinsic', {}).items())}\n"
     text += f"Pockets : {', '.join(f'{k}: {v}' for k, v in bot.get('Players',pid).get('Pockets', {}).items())}\n"
     await bot.Modules['Discord_Module'].return_resp(bot, interaction, text, ephemeral=True)

@@ -56,16 +56,18 @@ Get Player From Mention (Updated to Nomitron 6)
 def player_from_mention(bot: Bot, PID: Union[int, str]) -> discord.Member:
     if len(str(PID)) == 0: raise Exception("PID is empty")
     else:
-        player = user_from_PID(bot, int(re.search(r'\d+', str(PID)).group()))
-        if player is not None: return player
-        else: return None
+        found = re.search(r'\d+', str(PID))
+        if found is None or int(found.group()) not in bot.get_Ref('Players'): return None
+        return user_from_PID(bot, int(found.group()))
 """
 Get Player From Mention (Updated to Nomitron 6)
 """
 def role_from_mention(bot: Bot, RID: Union[int, str]) -> str:
     if len(str(RID)) == 0: raise Exception("RID is empty")
     else:
-        role = bot.where(('Roles', '*', 'RID'), lambda rid: rid == int(re.search(r'\d+', str(RID)).group()))
+        found = re.search(r'\d+', str(RID))
+        if found is None: return None
+        role = bot.where(('Roles', '*', 'RID'), lambda rid: rid == int(found.group()))
         if len(role) > 0: return role[0][1]
         else: return None
 
