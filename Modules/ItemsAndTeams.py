@@ -82,6 +82,11 @@ async def setup(bot):
         description= 'mod only -  set a player\'s intrinsic or pockets, or a team\'s bags or cups: !set-amount <@player or team> <amount> <resource>',
         callback = setAmount,
         checks = ['isMod'])
+    add_command(bot,
+        name= 'add-amount',
+        description= 'mod only -  add to a player\'s intrinsic or pockets, or a team\'s bags or cups (negative to take away): !add-amount <@player or team> <amount> <resource>',
+        callback = addAmount,
+        checks = ['isMod'])
 
     add_command(bot,
         name= 'resources',
@@ -380,19 +385,23 @@ async def teamData(bot, payload, *args):
 
 
 # Amounts
-async def setAmount(bot, payload, *args):
+async def addAmount(bot, payload, *args):
+    await setAmount(bot, payload, add = True)
+
+async def setAmount(bot, payload, *args, add = False):
     args = payload['Content'].split(' ')[1:]
     resources = bot.get('Resources')
     holdable = resources['Items'] + resources['Fluids'] # union of team and player holdability
     target, amount, name = splitAmount(bot, args)
     if target is None:
-        return await bot.Modules['Discord_Module'].return_resp(bot, payload, "Use !set-amount <@player or team> <amount> <resource>. The resource must be listed under Intrinsic, Items, Fluids or Sauces.")
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"Use !{'add' if add else 'set'}-amount <@player or team> <amount> <resource>. The resource must be listed under Intrinsic, Items, Fluids or Sauces.")
     table, key = target
     who = bot.get('Players', key, 'Name') if table == 'Players' else key
     
     if table == 'Players' and name in resources['Intrinsic']:
         if type(amount) is not int:
             return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is intrinsic, so the amount must be a whole number.")
+        if add: amount += bot.get('Players', key).get('Intrinsic', {}).get(name, 0)
         bot.set(('Players', key, 'Intrinsic', name), amount)
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} now has {amount} {name}.")
 
@@ -400,12 +409,13 @@ async def setAmount(bot, payload, *args):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is intrinsic, and teams don't hold intrinsic resources.")
     if name not in holdable:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} isn't listed under Intrinsic, Items or Fluids.")
+    path = ('Players', key, 'Pockets') if table == 'Players' else ('Teams', key, 'Bags' if name in resources['Items'] else 'Cups')
+    have = bot.get(*path, name) if bot.has(*path, name) else 0
+    if add: amount = toNumber(have + amount)    # the checks below are on the new total
     if table == 'Players' and name not in resources['Items'] and amount != 0:     # 0 still clears one held from before
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is a fluid, and pockets only hold items. Fluids go in a team's cups.")
     if amount < 0 or (name in resources['Items'] and type(amount) is not int):
-        return await bot.Modules['Discord_Module'].return_resp(bot, payload, "The amount can't be less than 0, and must be a whole number for an item.")
-    path = ('Players', key, 'Pockets') if table == 'Players' else ('Teams', key, 'Bags' if name in resources['Items'] else 'Cups')
-    have = bot.get(*path, name) if bot.has(*path, name) else 0
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, (f"{who} has {have} {name}. " if add else "") + "The amount can't be less than 0, and must be a whole number for an item.")
     if table == 'Players' and amount - have > pocketRoom(bot, key):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"That doesn't fit in {who}'s pockets. Raise their {pocketsStat} first.")
     if amount == 0: bot.remove(*path, name)
