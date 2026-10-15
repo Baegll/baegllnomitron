@@ -1,7 +1,7 @@
 """
 Main Run Function On Messages
 """
-import sys, urllib, discord, io # type: ignore
+import sys, urllib, discord, io, re # type: ignore
 
 async def find(bot, payload:dict, *args):
     text = payload['Content'][6:]
@@ -83,7 +83,7 @@ async def reload_references(bot):
 
     with urllib.request.urlopen('https://gitlab.com/nomicgame/nomic-ix/-/raw/master/rules.md?ref_type=heads') as response:
         rules = response.read().decode("utf-8").replace('&nbsp;~','').replace('\r','').replace('\n ','\n').replace('\n\n ','\n')
-        ruletxt = rules.split("\n## ")[1:]
+        ruletxt = re.split(r"\n## (?=\d+\s)", rules)[1:]
         for rule in ruletxt:
             try:
                 header = rule.split('\n',1)[0]
