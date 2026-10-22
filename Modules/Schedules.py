@@ -79,6 +79,7 @@ async def onTurnEnd(bot):
     # =============================================
     # Perform On Day End Functions Here============
     await bot.Modules['Voting'].TallyVotes(bot)
+    bot.add_Task(bot.Modules['Arcana'].onTurnEnd)
 
 
     # =============================================
@@ -140,7 +141,8 @@ async def onTurnStart(bot):
         name = f'On Deck',
         method_name = 'popProposalMain',
         module_name = 'Voting',
-        Key = ('Vars','Time'), Mode='>=', Trigger_Value= turnEndTime - 2*bot.day, sequential_only=False
+        Key = ('Vars','Time'), Mode='>=', Trigger_Value= turnEndTime - 2*bot.day,
+        kwargs={'scheduled_time': turnEndTime - 2*bot.day}, sequential_only=False
     ) 
 
     bot.schedule(
@@ -152,6 +154,7 @@ async def onTurnStart(bot):
 
     # =============================================
     # Perform On Turn Start Functions Here=========
+    await bot.Modules['Arcana'].onTurnStart(bot)
     await bot.wrap( bot.Modules['Voting'].popProposalJudge, {'bot':bot} )
 
 

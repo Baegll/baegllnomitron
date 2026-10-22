@@ -16,7 +16,7 @@ spiceSeed = {
 }
 
 pocketsStat    = 'Pockets'
-intrinsicStart = {'Luck': 1, pocketsStat: 2}    # what a player starts with; anything else starts at 0
+intrinsicStart = {'Luck': 1, pocketsStat: 2, 'Crystals': 0}    # what a player starts with; anything else starts at 0
 teamSize       = 3
 orderChan      = 'sauce-orders'
 maxOrderLen    = 1500                           # keeps an order post to a single message
@@ -135,6 +135,8 @@ async def setup(bot):
         'Sauces':    list(sauceSeed),
         'Fluids':    list(sauceSeed),
     })
+    if bot.has('Resources', 'Intrinsic') and 'Crystals' not in bot.get('Resources', 'Intrinsic'):
+        bot.stage(('Resources', 'Intrinsic'), 'append', 'Crystals')
     if not bot.has('Spices'): bot.set(('Spices',), kwargs=dict(spiceSeed))
     bot.update_nested_dict(('Teams',), structure = {})
 
@@ -402,6 +404,8 @@ async def setAmount(bot, payload, *args, add = False):
         if type(amount) is not int:
             return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is intrinsic, so the amount must be a whole number.")
         if add: amount += bot.get('Players', key).get('Intrinsic', {}).get(name, 0)
+        if name == 'Crystals' and amount < 0:
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Crystals cannot drop below 0.')
         bot.set(('Players', key, 'Intrinsic', name), amount)
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} now has {amount} {name}.")
 

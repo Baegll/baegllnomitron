@@ -1,7 +1,7 @@
 """
 Main Run Function On Messages
 """
-import sys, urllib, discord, io, re # type: ignore
+import sys, urllib.request, discord, io, re # type: ignore
 
 async def find(bot, payload:dict, *args):
     text = payload['Content'][6:]
@@ -97,6 +97,8 @@ async def reload_references(bot):
                     'Text': body, 
                     'Is Mutable': 'IMMUTABLE' in header
                 })
+                if int(rulenum) == 302:
+                    bot.add_Task(bot.Modules['Arcana'].syncEffects, {'text': body})
             except Exception as e:
                 bot.log('ERROR Importing Rules.', e, rule)
         

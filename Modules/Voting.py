@@ -22,7 +22,7 @@ defaultProposalData = {
 }
   
   
-Queues = ['main', 'judge']
+Queues = ['main', 'judge', 'tarot']
   
 yayEmojis = []
 yayVotes = [ "aye", "yay", "yes", "y",]
@@ -116,6 +116,9 @@ async def tally(bot, interaction:  discord.Interaction):
 
 async def TallyVotes(bot):
     bot.log('Vote Tally')
+    arcana = bot.Modules['Arcana']
+    rewards = {}
+    currentCards = bot.get('Cards')
     # Tally Main Voting Queue
     propIDs = where(bot, 'Queue-Proposals', lambda df: df['State'] == 'Voting')
     propKeys= [bot.get('Queue-Proposals',propID, 'Proposal#') for propID in propIDs]
@@ -139,6 +142,23 @@ async def TallyVotes(bot):
 
         # Tally Main Voting ( Nomitron 4 Safe)
         if len(yay_votes) > len(nay_votes):
+            if bot.has('Queue-Proposals', propID, 'Arcana'):
+                name = bot.get('Queue-Proposals', propID, 'Arcana')
+                effect = bot.get('Queue-Proposals', propID, 'Arcana Effect')
+                try: arcana.validateEffect(currentCards, name, effect)
+                except ValueError as error:
+                    # Retain votes and the proposal for adjudication; never apply or
+                    # reward an amendment that became invalid after an earlier tally.
+                    reason = str(error)
+                    if bot.get('Queue-Proposals', propID).get('Arcana Conflict') != reason:
+                        await bot.Modules['Discord_Module'].send(bot, chan, f'Proposal #{propNum} has a passing tally but needs adjudication: {reason}')
+                        bot.set(('Queue-Proposals', propID, 'Arcana Conflict'), reason)
+                    continue
+                currentCards['Definitions'][name]['Effect'] = effect
+                bot.set(('Cards', 'Definitions', name, 'Effect'), effect)
+                recipients = {propOwnerPid} | {bot.get('User-Proposal-Votes', vid, 'PID-Voter') for vid in yay_votes}
+                for pid in recipients:
+                    if bot.Modules['Discord_Module'].isPlayer(bot, pid): rewards[pid] = rewards.get(pid, 0) + 1
             await bot.Modules['Discord_Module'].send(bot, chan, f"- **Vote Status:**  {propOwnerName}'s Proposal Passes\n" \
                 f"  Tally: {len(yay_votes)} For, {len(nay_votes)} Against.")
         else:
@@ -155,6 +175,9 @@ async def TallyVotes(bot):
                 bot.add_Task(bot.Modules['Discord_Module'].set_channel_perms, {'text_channel_name':propChannel, 'permSetName':'Locked'} )
         bot.remove('Queue-Proposals',propID)
         for vote in all_votes: bot.remove('User-Proposal-Votes',vote)
+
+    for pid, amount in rewards.items():
+        bot.set(('Players', pid, 'Intrinsic', 'Crystals'), arcana.crystals(bot, pid) + amount)
 
 async def PutToVote(bot):
     bot.log('Vote Call')
@@ -179,12 +202,14 @@ def proposalText(bot, propID):
         
     msg = f"Proposal #{bot.get('Queue-Proposals', propID, 'Proposal#')} by: {bot.get('Players', bot.get('Queue-Proposals', propID, 'PID'), 'Name')} ({bot.get('Queue-Proposals', propID, 'Queue')} queue):\n"
     if bot.get('Queue-Proposals', propID, 'State') in ['Voting',"On Deck"]: msg += f"**Status: { bot.get('Queue-Proposals', propID, 'State') } ({len(yay_votes)} For, {len(nay_votes)} Against.)** \n\n"
+    if bot.has('Queue-Proposals', propID, 'Arcana'):
+        msg += 'Amend Rule 302 by setting the following Arcana Effect:\n\n'
     msg += bot.get('Queue-Proposals', propID, 'Body')
     return msg
   
-async def popProposalMain(bot):
+async def popProposalMain(bot, scheduled_time=None):
     bot.log('Pop Proposal Main')
-    rank_queue(bot)
+    ranked = rank_queue(bot)
     
     # Sort and emojinize
     init_proposal_val = bot.get('Vars', 'Next Proposal Number')
@@ -208,6 +233,26 @@ async def popProposalMain(bot):
         bot.set(('Queue-Proposals', propIDs[0], 'Channel'), votingChanGen(init_proposal_val))
         bot.set(('Queue-Proposals', propIDs[0], 'Proposal#'), init_proposal_val)
         init_proposal_val += 1
+
+    # Tarot numbers follow main and judicial proposals at the scheduled 48-hour mark.
+    cards = bot.get('Cards')
+    now, turn = bot.get('Vars', 'Time'), bot.get('Vars', 'Turn')
+    last = cards.get('Last Tarot Deck Scheduled')
+    if last is None and cards['Last Tarot Deck'] is not None:
+        last = cards['Last Tarot Deck'].replace(hour=0, minute=0, second=0, microsecond=0)
+    if scheduled_time is not None and now >= scheduled_time and cards.get('Last Tarot Turn') != turn and (last is None or scheduled_time - last >= 7 * bot.day):
+        arcana = bot.Modules['Arcana']
+        count = 0 if arcana.hasEffect(bot, 'The Hanged Man') else 3 if arcana.hasEffect(bot, 'The Chariot') else 2
+        proposals = ranked['tarot']
+        for propID in proposals[:count]:
+            bot.set(('Queue-Proposals', propID, 'State'), 'On Deck')
+            bot.set(('Queue-Proposals', propID, 'Channel'), votingChanGen(init_proposal_val))
+            bot.set(('Queue-Proposals', propID, 'Proposal#'), init_proposal_val)
+            init_proposal_val += 1
+        bot.set(('Cards', 'Last Tarot Turn'), turn)
+        if proposals[:count]:
+            bot.set(('Cards', 'Last Tarot Deck'), now)
+            bot.set(('Cards', 'Last Tarot Deck Scheduled'), scheduled_time)
 
     if init_proposal_val != bot.get('Vars', 'Next Proposal Number'):
         bot.set(('Vars', 'Next Proposal Number'), init_proposal_val)
@@ -339,7 +384,39 @@ async def on_message(bot, message):
         for k, d in message['Attachments'].items():
             if  '.txt' not in k: text += f"\nAttachment: { message['Attachment Links'][k] }"
         
+        if chan == 'tarot-proposals':
+            arcana = bot.Modules['Arcana']
+            old_props = where(bot, 'Queue-Proposals', lambda p: p['PID'] == pid and p['Queue'] == 'tarot' and p['State'] == 'Queue')
+            if text.strip() in ['.', '']:
+                for op in old_props: bot.remove('Queue-Proposals', op)
+                return await bot.Modules['Discord_Module'].add_reaction(bot, chan, mid, '📬')
+            try:
+                name, effect = arcana.tarotText(bot, text)
+                limit = 2 if arcana.hasEffect(bot, 'Two of Wands') else 1
+            except ValueError as error:
+                return await bot.Modules['Discord_Module'].return_resp(bot, message, str(error))
+            old_props.sort(key=lambda p: bot.get('Queue-Proposals', p, 'DOB'))
+            for op in old_props[:max(0, len(old_props) - limit + 1)]: bot.remove('Queue-Proposals', op)
+            propid = f"{pid}-{bot.get('Vars', 'Time')}"
+            bot.set(('Queue-Proposals', propid), {
+                'DOB': bot.get('Vars', 'Time'), 'PID': pid, 'Body': text,
+                'Arcana': name, 'Arcana Effect': effect,
+                'State': 'Queue', 'Queue': 'tarot', 'Link': message['Link'],
+                'Proposal#': None, 'Vote Close Time': None, 'Vote Start Time': None,
+                'Channel': None, 'Endorse-MID': None, 'Rank': None,
+            })
+            bot.set(('User-Proposal-Endorsement', f'{pid}-{propid}'), {'PID': pid, 'Proposal-ID': propid})
+            await bot.Modules['Discord_Module'].add_reaction(bot, chan, mid, '📬')
+
         if chan.replace("-proposals", "") == 'main':
+            tarot = {}
+            arcana = bot.Modules['Arcana']
+            if text.partition(':')[0].strip() in arcana.arcana or text.startswith('Amend Rule 302 by setting the following Arcana Effect:'):
+                try:
+                    name, effect = arcana.tarotText(bot, text)
+                    tarot = {'Arcana': name, 'Arcana Effect': effect}
+                except ValueError as error:
+                    return await bot.Modules['Discord_Module'].return_resp(bot, message, str(error))
             old_props = where(bot, 'Queue-Proposals', lambda df: (df['PID'] == pid and df['Queue']=='main' and df['State']=='Queue')) 
             for op in old_props: bot.remove('Queue-Proposals',op)
             propid = f"{pid}-{bot.get('Vars', 'Time')}"
@@ -349,6 +426,7 @@ async def on_message(bot, message):
                 'Body':text,
                 'State':'Queue',
                 'Queue': 'main',
+                **tarot,
                 'Link': message['Link'],
                 'Proposal#': None, 'Vote Close Time': None, 'Vote Start Time': None, 'Channel': None, 'Endorse-MID': None, 'Rank': None,
             })
@@ -405,6 +483,7 @@ async def on_message(bot, message):
             for k, d in message['Attachments'].items():
                 if  '.txt' not in k: text += f"\nAttachment: { message['Attachment Links'][k] }"
             
+            if not await validateDeckEdit(bot, message, propID, text): return
             bot.set(('Queue-Proposals', propID, 'Body'), text)
             await bot.Modules['Discord_Module'].add_reaction(bot, chan, mid, '✅' )
             all_votes = where(bot, 'User-Proposal-Votes', lambda df: (df['Proposal-ID'] == propID)) 
@@ -429,6 +508,7 @@ async def on_message(bot, message):
 
             if len(deck_propIDs) == 1:
                 propID = deck_propIDs[0]
+                if not await validateDeckEdit(bot, message, propID, text): return
                 bot.set(('Queue-Proposals', propID, 'Body'), text)
                 all_votes = where(bot, 'User-Proposal-Votes', lambda df: (df['Proposal-ID'] == propID)) 
 
@@ -439,6 +519,29 @@ async def on_message(bot, message):
             
     
   
+async def validateDeckEdit(bot, message, propID, text):
+    if not bot.has('Queue-Proposals', propID, 'Arcana'):
+        # A normal proposal may become a Tarot Proposal through a deck edit.
+        arcana = bot.Modules['Arcana']
+        if text.partition(':')[0].strip() not in arcana.arcana and not text.startswith('Amend Rule 302 by setting the following Arcana Effect:'): return True
+        try: name, effect = arcana.tarotText(bot, text)
+        except ValueError as error:
+            await bot.Modules['Discord_Module'].return_resp(bot, message, str(error))
+            return False
+        bot.set(('Queue-Proposals', propID, 'Arcana'), name)
+        bot.set(('Queue-Proposals', propID, 'Arcana Effect'), effect)
+        return True
+    try:
+        name, effect = bot.Modules['Arcana'].tarotText(bot, text)
+        if name != bot.get('Queue-Proposals', propID, 'Arcana'):
+            raise ValueError('A deck edit must target the same Arcana.')
+    except ValueError as error:
+        await bot.Modules['Discord_Module'].return_resp(bot, message, str(error))
+        return False
+    bot.set(('Queue-Proposals', propID, 'Arcana Effect'), effect)
+    return True
+
+
 """
 Update Function Called Every 10 Seconds (Done)
 """
@@ -469,6 +572,7 @@ Update the QUEUE
 lastqupdatetime = time.time()
 def rank_queue(bot):
     # Sort aand rank proposals
+    ranked = {}
     for source in Queues:
         propIDs= where(bot, 'Queue-Proposals', lambda df: df['Queue'] == source and df['State'] == 'Queue')
         propEnds = [where(bot, 'User-Proposal-Endorsement', lambda df: df['Proposal-ID'] == propID and bot.Modules['Discord_Module'].isActive(bot, df['PID'])) for propID in propIDs]
@@ -478,8 +582,12 @@ def rank_queue(bot):
 
         # Sorted list of player IDs In order of Suporters, then Age
         sorted_queued_props = [x for _, x in sorted(zip(propRank, propIDs))]
+        if source == 'tarot':
+            sorted_queued_props.sort(key=lambda p: -bot.get('Queue-Proposals', p).get('Tarot Priority', 0))
         for i, propID in enumerate(sorted_queued_props):
             if bot.get('Queue-Proposals', propID, 'Rank') != i: bot.set(('Queue-Proposals', propID, 'Rank'), i)
+        ranked[source] = sorted_queued_props
+    return ranked
        
 async def update_display(bot): 
 
@@ -504,9 +612,11 @@ async def update_display(bot):
                 'Files'  : {},
                 'Reactions' : ['👍', '👎', 'ℹ️']
             })
-        msgDictsEx = [ {'Content':'.'},]*(len(bot.keys('Players')) - len(msgDicts)) + msgDicts
+            if source == 'tarot': msgDicts[-1]['Content'] += f'\nID: `{propID}`'
+        padding = max(0, len(bot.keys('Players')) - len(msgDicts))
+        msgDictsEx = [ {'Content':'.'},]*padding + msgDicts
         msgids = await bot.Modules['Discord_Module'].display(bot, queueChanGen(source), msgDictsEx)
-        msgids = msgids[len(bot.keys('Players')) - len(msgDicts):]
+        msgids = msgids[padding:]
         for mid, propID in zip(msgids, sort_propIDs):
             if bot.get('Queue-Proposals', propID, 'Endorse-MID') != mid: bot.set(('Queue-Proposals', propID, 'Endorse-MID'), mid)
 
@@ -537,5 +647,3 @@ async def update_display(bot):
             msgDicts = [{'Content':b} for b in bot.Modules['Discord_Module']._splitText(text)]
             await bot.Modules['Discord_Module'].display(bot, chan, msgDicts)
     if chanMade: bot.add_Task( update_display )
-
-        
