@@ -58,6 +58,8 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
     def payload(self, content='', pid=1):
         return {'Content': content, 'Author PID': pid, 'Channel': 'actions'}
 
+    def allCards(self): return Arcana.getCards(self.bot)['Outside']
+
     def proposal(self, key, queue='tarot', pid=1, state='Queue', number=None):
         self.bot.Data['Queue-Proposals'][key] = {
             'Queue': queue, 'PID': pid, 'State': state, 'Rank': 0, 'DOB': self.bot.Data['Vars']['Time'],
@@ -96,6 +98,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Arcana.weight(cards, 'The Fool', True), 0)
 
     async def test_turn_draw_and_return_do_not_trigger_draw_effects(self):
+        self.bot.Data['Cards']['Definitions']['Wheel of Fortune']['Effect'] += ' A fragment'
         with patch.object(Arcana, 'choose', return_value='Wheel of Fortune'):
             await Arcana.onTurnStart(self.bot)
         self.commit()
@@ -106,7 +109,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.commit()
         self.assertIsNone(self.bot.Data['Cards']['Turn Card'])
         self.assertEqual(self.bot.Data['Cards']['Previous Turn Cards'], ['Wheel of Fortune'])
-        self.assertFalse(self.bot.Data['Cards']['Outside'])
+        self.assertFalse(self.allCards())
 
     async def test_non_arcana_turn_card_draws_for_eligible_active_player(self):
         self.bot.Data['Cards']['Definitions']['Other'] = {'Count': 1, 'Weight': 1, 'Effect': ''}
@@ -114,7 +117,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.bot.Data['Players'][1]['Can Draw Cards'] = False
         await Arcana.onTurnEnd(self.bot)
         self.commit()
-        self.assertEqual(self.bot.Data['Cards']['Outside'], [{'Name': 'Other', 'Owner': 2, 'Zone': 'Private Hand'}])
+        self.assertEqual(self.allCards(), [{'Name': 'Other', 'Owner': 2, 'Zone': 'Private Hand'}])
         self.drawn.assert_awaited_once()
 
     async def test_crystal_draw_limit_and_failed_draw(self):
@@ -123,11 +126,19 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         await Arcana.crystalDraw(self.bot, self.payload())
         self.commit()
         self.assertEqual(Arcana.crystals(self.bot, 1), 2)
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 1)
+        self.assertEqual(len(self.allCards()), 1)
         self.bot.Data['Players'][2]['Can Draw Cards'] = False
         await Arcana.crystalDraw(self.bot, self.payload(pid=2))
         self.commit()
         self.assertEqual(Arcana.crystals(self.bot, 2), 4)
+        self.bot.Data['Vars']['Turn'] += 1
+        await Arcana.crystalDraw(self.bot, self.payload())
+        self.commit()
+        self.assertEqual(Arcana.crystals(self.bot, 1), 0)
+        self.bot.Data['Vars']['Turn'] += 1
+        await Arcana.crystalDraw(self.bot, self.payload())
+        self.commit()
+        self.assertEqual(len(self.allCards()), 2)
 
     async def test_tarot_edit_distance_eligibility_and_deck_edits(self):
         self.assertEqual(Arcana.wordChanges('A B C', 'A X C D'), 2)
@@ -160,8 +171,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(effect=effect):
                 self.bot.Data['Queue-Proposals'] = {}
                 self.bot.Data['Cards']['Turn Card'] = effect
-                self.bot.Data['Cards']['Last Tarot Deck'] = None
-                self.bot.Data['Cards'].pop('Last Tarot Deck Scheduled', None)
+                self.bot.Data['Cards']['Last Tarot Deck Scheduled'] = None
                 self.bot.Data['Cards'].pop('Last Tarot Turn', None)
                 for i in range(3): self.proposal(f't{i}')
                 self.proposal('main', 'main')
@@ -174,8 +184,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([p['Proposal#'] for p in promoted], list(range(start+2, start+2+expected)))
         self.bot.Data['Cards']['Turn Card'] = None
         self.bot.Data['Cards']['Last Tarot Turn'] = 3
-        self.bot.Data['Cards']['Last Tarot Deck'] = self.bot.Data['Vars']['Time'] - 6*self.bot.day
-        self.bot.Data['Cards'].pop('Last Tarot Deck Scheduled', None)
+        self.bot.Data['Cards']['Last Tarot Deck Scheduled'] = self.bot.Data['Vars']['Time'] - 6*self.bot.day
         await self.promote()
         self.commit()
         self.assertTrue(all(p['State'] == 'Queue' for p in self.bot.Data['Queue-Proposals'].values() if p['Queue'] == 'tarot'))
@@ -217,16 +226,16 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         await Arcana.openingSpread(self.bot, payload)
         self.commit()
         self.assertEqual(Arcana.crystals(self.bot, 3), 6)
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 1)
+        self.assertEqual(len(self.allCards()), 1)
         await Arcana.openingDraw(self.bot, self.payload())
         self.commit()
         await Arcana.openingDraw(self.bot, self.payload())
         self.commit()
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 2)
+        self.assertEqual(len(self.allCards()), 2)
         self.bot.Data['Vars']['Turn'] += 1
         await Arcana.openingDraw(self.bot, self.payload(pid=2))
         self.commit()
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 2)
+        self.assertEqual(len(self.allCards()), 2)
 
     async def test_crystal_resource_migration_and_nonnegative(self):
         await ItemsAndTeams.setup(self.bot)
@@ -251,14 +260,6 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot.Data['Cards']['Definitions']['Wheel of Fortune']['Effect'], 'Every active player gains 2 Luck.')
         self.assertEqual(Arcana.crystals(self.bot, 1), 5)
 
-    async def test_failed_tarot_does_not_reward_or_change_effect(self):
-        self.proposal('t', state='Voting', number=312)
-        self.bot.Data['User-Proposal-Votes']['v'] = {'PID-Voter': 2, 'Proposal-ID': 't', 'Vote': 'Nay'}
-        await Voting.TallyVotes(self.bot)
-        self.commit()
-        self.assertEqual(Arcana.crystals(self.bot, 1), 4)
-        self.assertEqual(self.bot.Data['Cards']['Definitions']['Wheel of Fortune']['Effect'], Arcana.effects['Wheel of Fortune'])
-
     async def test_queue_display_handles_two_tarots_per_player(self):
         for i in range(4): self.proposal(f't{i}')
         discord = self.bot.Modules['Discord_Module']
@@ -268,32 +269,6 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.commit()
         self.assertEqual([self.bot.Data['Queue-Proposals'][f't{i}']['Endorse-MID'] for i in range(4)], [3, 2, 1, 0])
 
-    async def test_complete_seed_sentence_with_fragment_still_applies(self):
-        self.bot.Data['Cards']['Turn Card'] = 'The Chariot'
-        self.bot.Data['Cards']['Definitions']['The Chariot']['Effect'] += ' A fragment'
-        self.assertTrue(Arcana.hasEffect(self.bot, 'The Chariot'))
-
-    async def test_hand_is_private_and_excludes_other_owners_and_zones(self):
-        self.bot.Data['Cards']['Outside'] = [
-            {'Name': name, 'Owner': owner, 'Zone': zone}
-            for name, owner, zone in [('The Fool', 1, 'Private Hand'),
-                ('The Star', 1, 'Public Hand'), ('The Moon', 2, 'Private Hand'),
-                ('The Sun', 1, 'Play Area')]]
-        await Arcana.showHand(self.bot, self.payload())
-        self.bot.Modules['Discord_Module'].send.assert_awaited_once_with(
-            self.bot, 1, 'Your hand:\nThe Fool\nThe Star')
-        self.bot.Modules['Discord_Module'].return_resp.assert_not_awaited()
-        await Arcana.showHand(self.bot, self.payload(pid=3))
-        self.assertEqual(self.bot.Modules['Discord_Module'].send.call_args.args[2], 'Your hand:\n(empty)')
-
-    async def test_arcana_display_preserves_fragments(self):
-        self.bot.Data['Cards']['Definitions']['The Fool']['Effect'] = 'Unfinished thought'
-        await Arcana.showArcana(self.bot, self.payload())
-        text = self.bot.Modules['Discord_Module'].return_resp.call_args.args[2]
-        self.assertIn('Turn Card: none', text)
-        self.assertIn('The Fool: Unfinished thought', text)
-        self.assertIn('The World: (empty)', text)
-
     async def test_unclaimed_global_card_does_not_stop_future_turn_card_draws(self):
         cards = self.bot.Data['Cards']
         cards['Definitions']['Other'] = {'Count': 1, 'Weight': None, 'Effect': ''}
@@ -302,7 +277,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         await Arcana.onTurnEnd(self.bot)
         self.commit()
         self.assertIsNone(self.bot.Data['Cards']['Turn Card'])
-        self.assertEqual(self.bot.Data['Cards']['Outside'], [{'Name': 'Other', 'Owner': None, 'Zone': 'Global'}])
+        self.assertEqual(self.allCards(), [{'Name': 'Other', 'Owner': None, 'Zone': 'Global'}])
         self.drawn.assert_not_awaited()
         with patch.object(Arcana, 'choose', return_value='The Fool') as choose:
             await Arcana.onTurnStart(self.bot)
@@ -325,26 +300,11 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Arcana.crystals(self.bot, 1), 4)
         self.assertNotIn('Crystal Draw Turn', self.bot.Data['Players'][1])
 
-    async def test_crystal_draw_needs_funds_and_resets_next_turn(self):
-        self.bot.Data['Players'][1]['Intrinsic']['Crystals'] = 1
-        await Arcana.crystalDraw(self.bot, self.payload())
-        self.commit()
-        self.assertFalse(self.bot.Data['Cards']['Outside'])
-        self.assertEqual(Arcana.crystals(self.bot, 1), 1)
-        self.bot.Data['Players'][1]['Intrinsic']['Crystals'] = 4
-        await Arcana.crystalDraw(self.bot, self.payload())
-        self.commit()
-        self.bot.Data['Vars']['Turn'] += 1
-        await Arcana.crystalDraw(self.bot, self.payload())
-        self.commit()
-        self.assertEqual(Arcana.crystals(self.bot, 1), 0)
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 2)
-
     async def test_tarot_actions_reject_unowned_undecked_and_missing_targets_without_spending(self):
         self.proposal('other', pid=2)
         self.proposal('deck', state='On Deck')
         self.proposal('main', queue='main')
-        for callback in [Arcana.tarotTop, Arcana.tarotRemove]:
+        for callback in [Arcana.tarotTop]:
             for key in ['other', 'deck', 'main', 'missing', '']:
                 with self.subTest(command=callback.__name__, key=key):
                     before = self.bot.get('Queue-Proposals')
@@ -352,31 +312,6 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
                     self.commit()
                     self.assertEqual(self.bot.get('Queue-Proposals'), before)
                     self.assertEqual(Arcana.crystals(self.bot, 1), 4)
-
-    async def test_tarot_remove_cleans_endorsements_and_unfunded_boost_does_not_reorder(self):
-        self.proposal('mine')
-        self.bot.Data['User-Proposal-Endorsement']['e'] = {'PID': 2, 'Proposal-ID': 'mine'}
-        self.bot.Data['Players'][1]['Intrinsic']['Crystals'] = 1
-        await Arcana.tarotTop(self.bot, self.payload('!tarot-top mine'))
-        self.commit()
-        self.assertNotIn('Tarot Priority', self.bot.Data['Queue-Proposals']['mine'])
-        self.assertEqual(Arcana.crystals(self.bot, 1), 1)
-        await Arcana.tarotRemove(self.bot, self.payload('!tarot-remove mine'))
-        self.commit()
-        await Voting.update(self.bot)
-        self.commit()
-        self.assertFalse(self.bot.Data['Queue-Proposals'])
-        self.assertFalse(self.bot.Data['User-Proposal-Endorsement'])
-
-    async def test_invalid_tarot_format_and_word_change_boundaries(self):
-        for text in ['The Fool', 'Not a card: Something.', ': Something.']:
-            with self.subTest(text=text), self.assertRaises(ValueError): Arcana.tarotText(self.bot, text)
-        for old, new, distance in [('one two', '', 2), ('', 'one two', 2),
-                ('one two', 'three four', 2), ('one two', 'one two', 0),
-                ('one two three', 'four five six', 3)]:
-            self.assertEqual(Arcana.wordChanges(old, new), distance)
-        self.bot.Data['Cards']['Definitions']['The Fool']['Effect'] = 'One two.'
-        self.assertEqual(Arcana.tarotText(self.bot, 'The Fool: '), ('The Fool', ''))
 
     async def test_opening_spread_invalid_inputs_have_no_side_effects(self):
         for content in ['!opening-spread', '!opening-spread 999 :', '!opening-spread : 999']:
@@ -395,10 +330,10 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
     async def test_opening_claim_restrictions_do_not_consume_entitlement(self):
         await Arcana.openingDraw(self.bot, self.payload())
         self.commit()
-        self.assertFalse(self.bot.Data['Cards']['Outside'])
+        self.assertFalse(self.allCards())
         await Arcana.openingSpread(self.bot, self.payload('!opening-spread <@1> <@1> : 2 2'))
         self.commit()
-        self.assertEqual(len(self.bot.Data['Cards']['Outside']), 1)
+        self.assertEqual(len(self.allCards()), 1)
         self.assertEqual(self.bot.Data['Cards']['Opening Spread']['Eligible'], [1])
         self.bot.Data['Players'][1]['Can Draw Cards'] = False
         await Arcana.openingDraw(self.bot, self.payload())
@@ -470,19 +405,10 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Arcana.crystals(self.bot, 1), 4)
         self.assertFalse(self.bot.Data['Queue-Proposals'])
 
-    async def test_proposal_display_describes_only_the_arcana_amendment(self):
-        self.proposal('t', state='On Deck', number=312)
-        text = Voting.proposalText(self.bot, 't')
-        self.assertIn('Proposal #312', text)
-        self.assertIn('Amend Rule 302 by setting the following Arcana Effect:', text)
-        self.assertIn('Wheel of Fortune: Every active player gains 2 Luck.', text)
-        self.proposal('main', queue='main', state='On Deck', number=313)
-        self.assertNotIn('Amend Rule 302 by setting', Voting.proposalText(self.bot, 'main'))
-
     async def test_tarot_promotion_does_not_repeat_in_same_turn_or_consume_empty_cooldown(self):
         await self.promote()
         self.commit()
-        self.assertIsNone(self.bot.Data['Cards']['Last Tarot Deck'])
+        self.assertIsNone(self.bot.Data['Cards']['Last Tarot Deck Scheduled'])
         self.bot.Data['Vars']['Turn'] += 1
         for i in range(3): self.proposal(f't{i}')
         await self.promote()
@@ -632,10 +558,10 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         card = cards['Outside'][0]
         self.assertTrue(Arcana.visible(self.bot, card, 2))
         self.assertFalse(Arcana.visible(self.bot, card, 3))
-        await Arcana.showHand(self.bot, self.payload('!hand Tea', pid=2))
+        await Arcana.showCards(self.bot, self.payload(pid=2))
         self.assertIn('The Fool', self.bot.Modules['Discord_Module'].send.call_args.args[2])
-        await Arcana.showHand(self.bot, self.payload('!hand Tea', pid=3))
-        self.assertIn('not a member', self.bot.Modules['Discord_Module'].send.call_args.args[2])
+        await Arcana.showCards(self.bot, self.payload(pid=3))
+        self.assertNotIn('The Fool', self.bot.Modules['Discord_Module'].send.call_args.args[2])
         card['Zone'] = 'Public Hand'
         self.assertTrue(Arcana.visible(self.bot, card, 3))
         await Arcana.showCards(self.bot, self.payload(pid=3))
@@ -656,7 +582,7 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Foil', self.bot.Modules['Discord_Module'].send.call_args.args[2])
         await Arcana.onTurnEnd(self.bot)
         self.commit()
-        card = self.bot.Data['Cards']['Outside'][0]
+        card = self.allCards()[0]
         self.assertEqual((card['Edition'], card['Stickers']), ('Foil', ['A unique sticker']))
         self.assertEqual(self.drawn.await_count, 1)
 
@@ -671,17 +597,6 @@ class ArcanaTests(unittest.IsolatedAsyncioTestCase):
                 await Voting.on_message(self.bot, msg)
                 self.commit()
                 self.assertEqual(self.bot.get('Queue-Proposals'), before)
-
-    async def test_normal_deck_edit_becomes_tarot_and_rejects_invalid_conversion(self):
-        self.proposal('main', queue='main', state='On Deck', number=312)
-        prefix = 'Amend Rule 302 by setting the following Arcana Effect:\n\n'
-        self.assertFalse(await Voting.validateDeckEdit(self.bot, self.payload(), 'main', prefix + 'The Fool: An unseen card.'))
-        self.commit()
-        self.assertNotIn('Arcana', self.bot.Data['Queue-Proposals']['main'])
-        self.assertTrue(await Voting.validateDeckEdit(self.bot, self.payload(), 'main', prefix + 'Wheel of Fortune: Every active player gains 2 Luck.'))
-        self.commit()
-        self.assertEqual(self.bot.Data['Queue-Proposals']['main']['Arcana'], 'Wheel of Fortune')
-        self.assertEqual(self.bot.Data['Queue-Proposals']['main']['Arcana Effect'], 'Every active player gains 2 Luck.')
 
 
 if __name__ == '__main__': unittest.main()

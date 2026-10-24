@@ -215,6 +215,8 @@ async def setup(bot):
 
 
 async def on_message(bot, message):
+    if 'CardGame' in bot.Modules and bot.Modules['CardGame'].blockedAction(bot, message['Author PID']) and message['Content'].split() != ['!card', 'random']:
+        return await bot.Modules['Discord_Module'].return_resp(bot, message, 'Roll for the Random spell with !card random before any other action.')
     if message['Content'][0] == '!':
         cmdKey = message['Content'].split(' ')[0][1:]
         if cmdKey in bot.Commands.keys():

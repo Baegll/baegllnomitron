@@ -27,21 +27,67 @@ async def setup(bot):
                          'Effect': effects.get(name, '')} for name in arcana}
     bot.update_nested_dict(('Cards',), {
         'Definitions': definitions, 'Outside': [], 'Turn Card': None,
-        'Previous Turn Cards': [], 'Seen': [], 'Last Tarot Deck': None,
+        'Previous Turn Cards': [], 'Seen': [], 'Last Tarot Deck Scheduled': None,
         'Opening Spread': None,
     })
-    for name, callback, description, checks in [
-        ('arcana', showArcana, 'show the Turn Card and Arcana Effects', ['isPlayer', 'isSpam']),
-        ('hand', showHand, 'privately show your cards', ['isPlayer']),
-        ('cards', showCards, 'show global/public cards and hands visible to you', ['isPlayer', 'isSpam']),
-        ('crystal-draw', crystalDraw, 'spend 2 Crystals to draw, once per turn', ['isPlayer', 'isActions']),
-        ('tarot-top', tarotTop, 'spend 2 Crystals: !tarot-top <proposal id>', ['isPlayer', 'isActions']),
-        ('tarot-remove', tarotRemove, 'remove your queued Tarot: !tarot-remove <proposal id>', ['isPlayer', 'isActions']),
-        ('opening-spread', openingSpread, 'mod only - !opening-spread <voter IDs> : <passed author IDs>', ['isMod']),
-        ('opening-draw', openingDraw, 'claim your Opening Spread draw this turn', ['isPlayer', 'isActions']),
-    ]:
-        bot.Modules['Commands'].add_command(bot, name=name, callback=callback,
-                                           description=description, checks=checks)
+    for name, checks in [('card', ['isPlayer']), ('card-admin', ['isMod'])]:
+        bot.Modules['Commands'].add_command(bot, name=name, callback=command,
+            description=('mod only - ' if name == 'card-admin' else '') + 'card actions; use !' + name + ' for options', checks=checks)
+    await update(bot)
+
+
+async def update(bot):
+    for table in ['Players', 'Teams']:
+        if not bot.has(table): continue
+        for owner in bot.keys(table):
+            if not bot.has(table, owner, 'Hand'): bot.set((table, owner, 'Hand'), [])
+
+
+def getCards(bot):
+    """A working view of cards outside MDoMA; entity Hand lists are authoritative."""
+    cards = bot.get('Cards')
+    hands = []
+    for table in ['Players', 'Teams']:
+        for owner, entity in (bot.get(table) if bot.has(table) else {}).items():
+            for card in entity.get('Hand', []):
+                card['Owner'] = owner if table == 'Players' else [table, owner]
+                hands.append(card)
+    cards['Outside'] += hands
+    return cards
+
+
+def saveOutside(bot, outside):
+    hands = {(table, key): [] for table in ['Players', 'Teams'] if bot.has(table) for key in bot.keys(table)}
+    globalCards = []
+    for card in outside:
+        owner = card['Owner']
+        path = tuple(owner) if isinstance(owner, (list, tuple)) else ('Players', owner)
+        if card['Zone'] != 'Global' and path in hands: hands[path].append(card)
+        else: globalCards.append(card)
+    for path, hand in hands.items():
+        if not bot.has(*path, 'Hand') or bot.get(*path, 'Hand') != hand: bot.set(path + ('Hand',), hand)
+    if bot.get('Cards', 'Outside') != globalCards: bot.set(('Cards', 'Outside'), globalCards)
+
+
+async def command(bot, payload, *args):
+    words = payload['Content'].split(maxsplit=2)
+    admin = words[0] == '!card-admin'
+    routes = {'opening-spread': openingSpread} if admin else {
+        'list': showCards,
+        'crystal-draw': crystalDraw, 'opening-draw': openingDraw,
+        'tarot-top': tarotTop,
+    }
+    action = words[1] if len(words) > 1 else ''
+    if action in routes:
+        # Keep command-specific parsing local while exposing just two entry points.
+        adapted = payload | {'Content': '!' + action + (' ' + words[2] if len(words) > 2 else '')}
+        if not admin and action in ['crystal-draw', 'opening-draw', 'tarot-top'] and payload.get('Channel') != 'actions':
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Use this card action in #actions.')
+        if 'CardGame' in bot.Modules and bot.Modules['CardGame'].blockedAction(bot, payload['Author PID']):
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Use !card random before any other action.')
+        return await routes[action](bot, adapted)
+    if 'CardGame' in bot.Modules: return await bot.Modules['CardGame'].command(bot, payload)
+    await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Card actions: ' + ', '.join(routes))
 
 
 def players(bot, active=False):
@@ -51,6 +97,7 @@ def players(bot, active=False):
 
 
 def canDraw(bot, pid):
+    if 'CardGame' in bot.Modules and bot.has('Card Game') and not bot.Modules['CardGame'].canDraw(bot, pid): return False
     if isinstance(pid, (list, tuple)):
         return bot.has(*pid) and bot.get(*pid).get('Can Draw Cards', True)
     return bot.get('Players', pid).get('Can Draw Cards', True)
@@ -63,7 +110,7 @@ def members(bot, owner):
 
 
 def visible(bot, card, pid):
-    return card['Zone'] != 'Private Hand' or pid in members(bot, card['Owner'])
+    return card['Zone'] not in ['Private Hand', 'Personal Deck'] or pid in members(bot, card['Owner'])
 
 
 def crystals(bot, pid):
@@ -82,6 +129,7 @@ def effectApplies(cards, name):
 def weight(cards, name, turn=False):
     definition = cards['Definitions'][name]
     count = sum(card['Name'] == name for card in cards['Outside'])
+    count += sum(card['Name'] == name for card in cards.get('Destroyed', []))
     count += cards['Turn Card'] == name
     if definition['Count'] is not None and count >= definition['Count']: return 0
     if turn:
@@ -117,11 +165,12 @@ async def draw(bot, cards, pid, name=None, card=None):
     # Turn Card selection never calls this hook.
     for module in bot.Modules.values():
         if hasattr(module, 'on_card_draw'): await module.on_card_draw(bot, pid, dict(card))
+        if hasattr(module, 'on_card_received'): await module.on_card_received(bot, pid, card, cards)
     return name
 
 
 async def onTurnStart(bot):
-    cards = bot.get('Cards')
+    cards = getCards(bot)
     if cards['Turn Card'] is not None: return
     cards['Turn Card'] = choose(cards, turn=True)
     name = cards['Turn Card']
@@ -140,7 +189,7 @@ async def onTurnStart(bot):
 
 
 async def onTurnEnd(bot):
-    cards = bot.get('Cards')
+    cards = getCards(bot)
     name = cards['Turn Card']
     cards['Previous Turn Cards'] = [name] if name else []
     if name and name not in arcana:
@@ -152,7 +201,9 @@ async def onTurnEnd(bot):
         else: await draw(bot, cards, random.choice(eligible), name, card=card)
     cards['Turn Card'] = None
     cards['Turn Card Details'] = None
-    for field in ['Turn Card', 'Turn Card Details', 'Previous Turn Cards', 'Outside']: bot.set(('Cards', field), cards[field])
+    for field in ['Turn Card', 'Turn Card Details', 'Previous Turn Cards']: bot.set(('Cards', field), cards[field])
+    saveOutside(bot, cards['Outside'])
+    if 'CardGame' in bot.Modules: bot.add_Task(bot.Modules['CardGame'].onTurnEnd)
 
 
 def wordChanges(old, new):
@@ -207,25 +258,8 @@ async def syncEffects(bot, text):
     bot.set(('Cards', 'Rule Effects Source'), section)
 
 
-async def showArcana(bot, payload, *args):
-    cards = bot.get('Cards')
-    text = f'Turn Card: {cards["Turn Card"] or "none"}\n'
-    text += '\n'.join(f'{name}: {cards["Definitions"][name]["Effect"] or "(empty)"}' for name in arcana)
-    await bot.Modules['Discord_Module'].return_resp(bot, payload, text)
-
-
-async def showHand(bot, payload, *args):
-    pid = payload['Author PID']
-    words = payload['Content'].split(maxsplit=1)
-    owner = ['Teams', words[1].strip()] if len(words) > 1 else pid
-    if pid not in members(bot, owner):
-        return await bot.Modules['Discord_Module'].send(bot, pid, 'You are not a member of that entity.')
-    hand = [c['Name'] for c in bot.get('Cards', 'Outside') if c['Owner'] == owner and c['Zone'].endswith('Hand') and visible(bot, c, pid)]
-    await bot.Modules['Discord_Module'].send(bot, pid, 'Your hand:\n' + ('\n'.join(hand) or '(empty)'))
-
-
 async def showCards(bot, payload, *args):
-    cards = bot.get('Cards')
+    cards = getCards(bot)
     visibleCards = [str(card) for card in cards['Outside'] if visible(bot, card, payload['Author PID'])]
     if cards['Turn Card']: visibleCards.append(str(cards.get('Turn Card Details') or {'Name': cards['Turn Card'], 'Zone': 'Global'}))
     # Always DM: the result can include the requester's private cards.
@@ -234,13 +268,13 @@ async def showCards(bot, payload, *args):
 
 async def crystalDraw(bot, payload, *args):
     pid, turn = payload['Author PID'], bot.get('Vars', 'Turn')
-    cards = bot.get('Cards')
+    cards = getCards(bot)
     if bot.get('Players', pid).get('Crystal Draw Turn') == turn:
         text = 'You already used your Crystal draw this turn.'
     elif crystals(bot, pid) < 2: text = 'You need 2 Crystals.'
     elif await draw(bot, cards, pid) is None: text = 'You cannot draw a card.'
     else:
-        bot.set(('Cards', 'Outside'), cards['Outside'])
+        saveOutside(bot, cards['Outside'])
         bot.set(('Players', pid, 'Intrinsic', 'Crystals'), crystals(bot, pid) - 2)
         bot.set(('Players', pid, 'Crystal Draw Turn'), turn)
         text = 'Spent 2 Crystals to draw a card.'
@@ -269,16 +303,8 @@ async def tarotTop(bot, payload, *args):
     await bot.Modules['Discord_Module'].return_resp(bot, payload, text)
 
 
-async def tarotRemove(bot, payload, *args):
-    try:
-        bot.remove('Queue-Proposals', ownTarot(bot, payload))
-        text = 'Removed your Tarot Proposal.'
-    except ValueError as error: text = str(error)
-    await bot.Modules['Discord_Module'].return_resp(bot, payload, text)
-
-
 async def openingSpread(bot, payload, *args):
-    cards = bot.get('Cards')
+    cards = getCards(bot)
     if cards['Opening Spread'] is not None:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'The Opening Spread has already happened.')
     words = payload['Content'].split(maxsplit=1)
@@ -286,26 +312,26 @@ async def openingSpread(bot, payload, *args):
     eligible, passed = set(map(int, re.findall(r'\d+', voters))), set(map(int, re.findall(r'\d+', authors)))
     pids = players(bot)
     if not separator or not (eligible | passed) <= set(pids):
-        return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Use !opening-spread <voter IDs> : <passed author IDs>; all IDs must be players.')
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Use !card-admin opening-spread <voter IDs> : <passed author IDs>; all IDs must be players.')
     if any(not canDraw(bot, pid) for pid in passed):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'A listed author cannot draw; resolve their restriction before applying the Opening Spread.')
     for pid in pids: bot.set(('Players', pid, 'Intrinsic', 'Crystals'), crystals(bot, pid) + 2)
     for pid in sorted(passed): await draw(bot, cards, pid)
     cards['Opening Spread'] = {'Turn': bot.get('Vars', 'Turn'), 'Eligible': sorted(eligible), 'Claimed': []}
-    bot.set(('Cards', 'Outside'), cards['Outside'])
+    saveOutside(bot, cards['Outside'])
     bot.set(('Cards', 'Opening Spread'), cards['Opening Spread'])
-    await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Opening Spread applied once. Eligible voters may use !opening-draw before this turn ends.')
+    await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Opening Spread applied once. Eligible voters may use !card opening-draw before this turn ends.')
 
 
 async def openingDraw(bot, payload, *args):
-    cards, pid = bot.get('Cards'), payload['Author PID']
+    cards, pid = getCards(bot), payload['Author PID']
     opening = cards['Opening Spread']
     if not opening or opening['Turn'] != bot.get('Vars', 'Turn') or pid not in opening['Eligible'] or pid in opening['Claimed']:
         text = 'You have no Opening Spread draw available this turn.'
     elif await draw(bot, cards, pid) is None: text = 'You cannot draw a card.'
     else:
         opening['Claimed'].append(pid)
-        bot.set(('Cards', 'Outside'), cards['Outside'])
+        saveOutside(bot, cards['Outside'])
         bot.set(('Cards', 'Opening Spread'), opening)
         text = 'Opening Spread draw claimed.'
     await bot.Modules['Discord_Module'].return_resp(bot, payload, text)

@@ -16,7 +16,7 @@ spiceSeed = {
 }
 
 pocketsStat    = 'Pockets'
-intrinsicStart = {'Luck': 1, pocketsStat: 2, 'Crystals': 0}    # what a player starts with; anything else starts at 0
+intrinsicStart = {'Luck': 1, pocketsStat: 2, 'Crystals': 0, 'HP': 100, 'DeckCapacity': 3}    # anything else starts at 0
 teamSize       = 3
 orderChan      = 'sauce-orders'
 maxOrderLen    = 1500                           # keeps an order post to a single message
@@ -135,8 +135,9 @@ async def setup(bot):
         'Sauces':    list(sauceSeed),
         'Fluids':    list(sauceSeed),
     })
-    if bot.has('Resources', 'Intrinsic') and 'Crystals' not in bot.get('Resources', 'Intrinsic'):
-        bot.stage(('Resources', 'Intrinsic'), 'append', 'Crystals')
+    if bot.has('Resources', 'Intrinsic'):
+        for name in intrinsicStart:
+            if name not in bot.get('Resources', 'Intrinsic'): bot.stage(('Resources', 'Intrinsic'), 'append', name)
     if not bot.has('Spices'): bot.set(('Spices',), kwargs=dict(spiceSeed))
     bot.update_nested_dict(('Teams',), structure = {})
 
@@ -404,8 +405,12 @@ async def setAmount(bot, payload, *args, add = False):
         if type(amount) is not int:
             return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is intrinsic, so the amount must be a whole number.")
         if add: amount += bot.get('Players', key).get('Intrinsic', {}).get(name, 0)
-        if name == 'Crystals' and amount < 0:
-            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'Crystals cannot drop below 0.')
+        if name in ['Crystals', 'DeckCapacity'] and amount < 0:
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, f'{name} cannot drop below 0.')
+        if name == 'HP' and amount < 1:
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'HP cannot drop below 1.')
+        if amount > bot.get('Players', key).get('Intrinsic', {}).get(name, 0) and 'CardGame' in bot.Modules and not bot.Modules['CardGame'].tradeableGainAllowed(bot, key, name):
+            return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'A toad cannot gain tradeable resources.')
         bot.set(('Players', key, 'Intrinsic', name), amount)
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} now has {amount} {name}.")
 
@@ -446,6 +451,8 @@ async def give(bot, payload, *args):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} is not a player.")
     if table == 'Players' and name not in resources['Items']:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"Pockets only hold items, so {name} can only be given to a team.")
+    if table == 'Players' and 'CardGame' in bot.Modules and not bot.Modules['CardGame'].tradeableGainAllowed(bot, key, name):
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'A toad cannot gain tradeable resources.')
     if table == 'Players' and amount > pocketRoom(bot, key):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{who} doesn't have room in their pockets.")
     path = ('Players', key, 'Pockets') if table == 'Players' else ('Teams', key, 'Bags' if name in resources['Items'] else 'Cups')
@@ -470,6 +477,8 @@ async def pocket(bot, payload, *args):
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} is a fluid, and pockets only hold items. It stays in your team's cups.")
     if name not in resources['Items']:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, f"{name} isn't an item. !resources lists them.")
+    if 'CardGame' in bot.Modules and not bot.Modules['CardGame'].tradeableGainAllowed(bot, pid, name):
+        return await bot.Modules['Discord_Module'].return_resp(bot, payload, 'A toad cannot gain tradeable resources.')
     if team is None:
         return await bot.Modules['Discord_Module'].return_resp(bot, payload, "You aren't on a team.")
     if amount <= 0 or type(amount) is not int:
